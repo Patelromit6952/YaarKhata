@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "13012388637",
+    "project_id": "friendsbook-2e205",
+    "storage_bucket": "friendsbook-2e205.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:13012388637:android:897bf5d69cafe4cbba2ff4",
+        "android_client_info": {
+          "package_name": "com.example.friendsbook"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDwLDgbfWHv4mBaws-9cpGMKWQrAyh9myQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
