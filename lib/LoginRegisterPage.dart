@@ -1,10 +1,11 @@
-// lib/LoginRegisterPage.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dataservice.dart';
 import 'FriendsListPage.dart';
 
 class LoginRegisterPage extends StatefulWidget {
+  const LoginRegisterPage({super.key});
+
   @override
   _LoginRegisterPageState createState() => _LoginRegisterPageState();
 }
@@ -12,14 +13,20 @@ class LoginRegisterPage extends StatefulWidget {
 class _LoginRegisterPageState extends State<LoginRegisterPage> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
+  final _otpController = TextEditingController();
   bool _isLoading = false;
   bool _isRegistering = true;
+  bool _showOTP = false;
+  String? _verificationId;
 
   @override
   void dispose() {
     _nameController.dispose();
+    _emailController.dispose();
     _phoneController.dispose();
+    _otpController.dispose();
     super.dispose();
   }
 
@@ -37,7 +44,6 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
     if (value == null || value.isEmpty) {
       return 'Please enter your phone number';
     }
-    // Remove spaces and special characters for validation
     String cleanPhone = value.replaceAll(RegExp(r'[^\d]'), '');
     if (cleanPhone.length != 10) {
       return 'Please enter a valid 10-digit phone number';
@@ -45,7 +51,28 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
     return null;
   }
 
-  Future<void> _handleSubmit() async {
+  String? _validateEmail(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return 'Please enter your email';
+    }
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    if (!emailRegex.hasMatch(value.trim())) {
+      return 'Please enter a valid email address';
+    }
+    return null;
+  }
+
+  String? _validateOTP(String? value) {
+    if (value == null || value.isEmpty) {
+      return 'Please enter the OTP';
+    }
+    if (value.length != 6) {
+      return 'OTP must be 6 digits';
+    }
+    return null;
+  }
+
+  Future<void> _handleSubmitEmail() async {
     if (!_formKey.currentState!.validate()) {
       return;
     }
@@ -55,35 +82,92 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
     });
 
     try {
-      final name = _nameController.text.trim();
       final phone = _phoneController.text.replaceAll(RegExp(r'[^\d]'), '');
+      final email = _emailController.text.trim();
 
-      if (_isRegistering) {
-        // Register new user
-        await DataService().registerUser(name, phone);
-        _showSuccessMessage('Registration successful!');
-      } else {
-        // Login existing user
-        bool success = await DataService().loginUser(phone);
-        if (!success) {
-          _showErrorMessage('Phone number not found. Please register first.');
+      // Check if phone is registered (for login) or not registered (for registration)
+      bool isRegistered = await DataService().isPhoneNumberRegistered(phone);
+
+      if (_isRegistering && isRegistered) {
+        _showErrorMessage('Phone number already registered. Please use login instead.');
+        setState(() {
+          _isLoading = false;
+        });
+        return;
+      }
+
+      if (!_isRegistering && !isRegistered) {
+        _showErrorMessage('Phone number not registered. Please register first.');
+        setState(() {
+          _isLoading = false;
+        });
+        return;
+      }
+
+      await DataService().sendOTP(
+        email,
+            (verificationId) {
+          setState(() {
+            _showOTP = true;
+            _verificationId = verificationId;
+            _isLoading = false;
+          });
+        },
+            (error) {
+          _showErrorMessage(error);
           setState(() {
             _isLoading = false;
           });
-          return;
-        }
-        _showSuccessMessage('Login successful!');
+        },
+      );
+    } catch (e) {
+      _showErrorMessage('Error: $e');
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _handleSubmitOTP() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final phone = _phoneController.text.replaceAll(RegExp(r'[^\d]'), '');
+      final email = _emailController.text.trim();
+      final otp = _otpController.text.trim();
+
+      bool success = false;
+
+      if (_isRegistering) {
+        final name = _nameController.text.trim();
+        await DataService().registerUserWithOTP(phone, name, email, _verificationId ?? '', otp);
+        success = true;
+      } else {
+        await DataService().loginUserWithOTP(phone, email, _verificationId ?? '', otp);
+        success = true;
       }
 
-      // Navigate to main app
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => FriendsListPage()),
-        );
+      if (success) {
+        _showSuccessMessage(_isRegistering ? 'Registration successful!' : 'Login successful!');
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => FriendsListPage()),
+          );
+        }
       }
     } catch (e) {
-      _showErrorMessage('Error: ${e.toString()}');
+      String errorMessage = e.toString();
+      if (errorMessage.startsWith('Exception: ')) {
+        errorMessage = errorMessage.substring(11);
+      }
+      _showErrorMessage(errorMessage);
     } finally {
       if (mounted) {
         setState(() {
@@ -93,30 +177,45 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
     }
   }
 
+  void _switchMode() {
+    setState(() {
+      _isRegistering = !_isRegistering;
+      _showOTP = false;
+      _otpController.clear();
+      _emailController.clear();
+      _phoneController.clear();
+      _verificationId = null;
+    });
+  }
+
   void _showSuccessMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.green,
-        duration: Duration(seconds: 2),
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   void _showErrorMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-        duration: Duration(seconds: 3),
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor:Colors.blue.shade600,
+      backgroundColor: Colors.blue.shade600,
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -128,11 +227,10 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: EdgeInsets.symmetric(horizontal: 32),
+              padding: const EdgeInsets.symmetric(horizontal: 32),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // App Logo/Icon
                   Container(
                     width: 100,
                     height: 100,
@@ -143,7 +241,7 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
                         BoxShadow(
                           color: Colors.black.withOpacity(0.1),
                           blurRadius: 20,
-                          offset: Offset(0, 10),
+                          offset: const Offset(0, 10),
                         ),
                       ],
                     ),
@@ -153,11 +251,8 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
                       color: Colors.blue.shade600,
                     ),
                   ),
-
-                  SizedBox(height: 30),
-
-                  // App Title
-                  Text(
+                  const SizedBox(height: 30),
+                  const Text(
                     'Friends Transaction',
                     style: TextStyle(
                       fontSize: 28,
@@ -165,7 +260,6 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
                       color: Colors.white,
                     ),
                   ),
-
                   Text(
                     'Track expenses with friends easily',
                     style: TextStyle(
@@ -173,12 +267,9 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
                       color: Colors.white.withOpacity(0.8),
                     ),
                   ),
-
-                  SizedBox(height: 50),
-
-                  // Login/Register Form Card
+                  const SizedBox(height: 50),
                   Container(
-                    padding: EdgeInsets.all(32),
+                    padding: const EdgeInsets.all(32),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
@@ -186,7 +277,7 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
                         BoxShadow(
                           color: Colors.black.withOpacity(0.1),
                           blurRadius: 20,
-                          offset: Offset(0, 10),
+                          offset: const Offset(0, 10),
                         ),
                       ],
                     ),
@@ -194,18 +285,25 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
                       key: _formKey,
                       child: Column(
                         children: [
-                          // Toggle between Login/Register
+                          // Mode Switcher (Register/Login)
                           Row(
                             children: [
                               Expanded(
                                 child: GestureDetector(
                                   onTap: () {
-                                    setState(() {
-                                      _isRegistering = true;
-                                    });
+                                    if (!_isRegistering) {
+                                      setState(() {
+                                        _isRegistering = true;
+                                        _showOTP = false;
+                                        _otpController.clear();
+                                        _emailController.clear();
+                                        _phoneController.clear();
+                                        _verificationId = null;
+                                      });
+                                    }
                                   },
                                   child: Container(
-                                    padding: EdgeInsets.symmetric(vertical: 12),
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
                                     decoration: BoxDecoration(
                                       color: _isRegistering
                                           ? Colors.blue.shade600
@@ -225,16 +323,23 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
                                   ),
                                 ),
                               ),
-                              SizedBox(width: 8),
+                              const SizedBox(width: 8),
                               Expanded(
                                 child: GestureDetector(
                                   onTap: () {
-                                    setState(() {
-                                      _isRegistering = false;
-                                    });
+                                    if (_isRegistering) {
+                                      setState(() {
+                                        _isRegistering = false;
+                                        _showOTP = false;
+                                        _otpController.clear();
+                                        _emailController.clear();
+                                        _phoneController.clear();
+                                        _verificationId = null;
+                                      });
+                                    }
                                   },
                                   child: Container(
-                                    padding: EdgeInsets.symmetric(vertical: 12),
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
                                     decoration: BoxDecoration(
                                       color: !_isRegistering
                                           ? Colors.blue.shade600
@@ -256,98 +361,213 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
                               ),
                             ],
                           ),
+                          const SizedBox(height: 30),
 
-                          SizedBox(height: 30),
-
-                          // Name Field (only for registration)
-                          if (_isRegistering) ...[
+                          // Name field (only for registration)
+                          if (!_showOTP && _isRegistering) ...[
                             TextFormField(
                               controller: _nameController,
                               validator: _validateName,
+                              cursorColor: Colors.blue.shade600,
                               decoration: InputDecoration(
                                 labelText: 'Full Name',
-                                prefixIcon: Icon(Icons.person_outline),
+                                labelStyle: TextStyle(color: Colors.blue.shade600),
+                                prefixIcon: Icon(Icons.person_outline, color: Colors.blue.shade600),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide(color: Colors.blue.shade300),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.blue.shade600),
+                                  borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide(color: Colors.blue.shade300),
                                 ),
                               ),
                               textCapitalization: TextCapitalization.words,
                             ),
-                            SizedBox(height: 20),
+                            const SizedBox(height: 20),
                           ],
 
-                          // Phone Field
-                          TextFormField(
-                            controller: _phoneController,
-                            validator: _validatePhone,
-                            keyboardType: TextInputType.phone,
-                            inputFormatters: [
-                              FilteringTextInputFormatter.digitsOnly,
-                              LengthLimitingTextInputFormatter(10),
-                            ],
-                            decoration: InputDecoration(
-                              labelText: 'Phone Number',
-                              prefixIcon: Icon(Icons.phone_outlined),
-                              prefixText: '+91 ',
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.blue.shade600),
-                              ),
-                              hintText: '9876543210',
-                            ),
-                          ),
-
-                          SizedBox(height: 30),
-
-                          // Submit Button
-                          SizedBox(
-                            width: double.infinity,
-                            height: 50,
-                            child: ElevatedButton(
-                              onPressed: _isLoading ? null : _handleSubmit,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blue.shade600,
-                                shape: RoundedRectangleBorder(
+                          // Email field (for both registration and login)
+                          if (!_showOTP) ...[
+                            TextFormField(
+                              controller: _emailController,
+                              validator: _validateEmail,
+                              keyboardType: TextInputType.emailAddress,
+                              cursorColor: Colors.blue.shade600,
+                              decoration: InputDecoration(
+                                labelText: 'Email Address',
+                                labelStyle: TextStyle(color: Colors.blue.shade600),
+                                prefixIcon: Icon(Icons.email_outlined, color: Colors.blue.shade600),
+                                border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide(color: Colors.blue.shade300),
                                 ),
-                                elevation: 0,
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide(color: Colors.blue.shade300),
+                                ),
+                                hintText: 'example@domain.com',
                               ),
-                              child: _isLoading
-                                  ? SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
+                            ),
+                            const SizedBox(height: 20),
+                          ],
+
+                          // Phone field (for both registration and login)
+                          if (!_showOTP) ...[
+                            TextFormField(
+                              controller: _phoneController,
+                              validator: _validatePhone,
+                              keyboardType: TextInputType.phone,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                                LengthLimitingTextInputFormatter(10),
+                              ],
+                              cursorColor: Colors.blue.shade600,
+                              decoration: InputDecoration(
+                                labelText: 'Phone Number',
+                                labelStyle: TextStyle(color: Colors.blue.shade600),
+                                prefixIcon: Icon(Icons.phone_outlined, color: Colors.blue.shade600),
+                                prefixText: '+91 ',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide(color: Colors.blue.shade300),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide(color: Colors.blue.shade300),
+                                ),
+                                hintText: '9876543210',
+                              ),
+                            ),
+                            const SizedBox(height: 30),
+
+                            // Send OTP Button
+                            SizedBox(
+                              width: double.infinity,
+                              height: 50,
+                              child: ElevatedButton(
+                                onPressed: _isLoading ? null : _handleSubmitEmail,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.blue.shade600,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  elevation: 0,
+                                ),
+                                child: _isLoading
+                                    ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                  ),
+                                )
+                                    : const Text(
+                                  'Send OTP to Email',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
                                   ),
                                 ),
-                              )
-                                  : Text(
-                                _isRegistering ? 'Create Account' : 'Login',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white,
-                                ),
                               ),
                             ),
-                          ),
+                          ],
+
+                          // OTP field and verification
+                          if (_showOTP) ...[
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                TextFormField(
+                                  controller: _otpController,
+                                  validator: _validateOTP,
+                                  keyboardType: TextInputType.number,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.digitsOnly,
+                                    LengthLimitingTextInputFormatter(6),
+                                  ],
+                                  cursorColor: Colors.blue.shade600,
+                                  decoration: InputDecoration(
+                                    labelText: 'Enter OTP',
+                                    labelStyle: TextStyle(color: Colors.blue.shade600),
+                                    prefixIcon: Icon(Icons.lock_outline, color: Colors.blue.shade600),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: BorderSide(color: Colors.blue.shade300),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: BorderSide(color: Colors.blue.shade300),
+                                    ),
+                                    hintText: '123456',
+                                  ),
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    letterSpacing: 4,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 20),
+
+                                // Verify OTP Button
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 50,
+                                  child: ElevatedButton(
+                                    onPressed: _isLoading ? null : _handleSubmitOTP,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.blue.shade600,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      elevation: 0,
+                                    ),
+                                    child: _isLoading
+                                        ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                      ),
+                                    )
+                                        : Text(
+                                      _isRegistering ? 'Register' : 'Login',
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),
                   ),
-
-                  SizedBox(height: 30),
-
-                  // Additional Info
+                  const SizedBox(height: 30),
                   Text(
                     'Your data is stored securely and never shared',
                     style: TextStyle(

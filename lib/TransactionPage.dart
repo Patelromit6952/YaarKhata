@@ -1,12 +1,20 @@
-// lib/TransactionPage.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:friendsbook/AddtransactionPage.dart';
+import 'package:friendsbook/widgets/skeleton_loading_widget.dart';
+import 'package:intl/intl.dart';
 import 'dataservice.dart';
 import 'models/models.dart';
+import 'widgets/dash_painter.dart';
+import 'dialogs/delete_confirmation_dialog.dart';
+import 'utils/transaction_utils.dart';
+import 'dialogs/settlement_dialog.dart';
+import 'widgets/skeleton_loading_widget.dart'; // Import SkeletonLoadingWidget
 
 class TransactionPage extends StatefulWidget {
   final Friend friend;
 
-  TransactionPage({required this.friend});
+  const TransactionPage({required this.friend, super.key});
 
   @override
   _TransactionPageState createState() => _TransactionPageState();
@@ -14,188 +22,201 @@ class TransactionPage extends StatefulWidget {
 
 class _TransactionPageState extends State<TransactionPage> {
   final DataService _dataService = DataService();
-  final TextEditingController _amountController = TextEditingController();
 
-  // Static dropdown options
-  final List<String> _descriptionOptions = [
-    'Bhavani',
-    'Bajarang',
-    'Ravi',
-    'Dmart',
-    'Reliance Fresh',
-    'Petrol',
-    'Pizza',
-  ];
+  void _showSettlementDialog(double currentBalance) {
+    SettlementDialog.show(
+      context: context,
+      currentBalance: currentBalance,
+      friend: widget.friend,
+      dataService: _dataService,
+      onSettled: () => setState(() {}),
+    );
+  }
 
-  String? _selectedDescription;
+  void _refreshTransactions() {
+    setState(() {});
+  }
 
-  // Method to calculate current balance from transactions
-  double _calculateBalance(List<Transaction> transactions) {
-    double balance = 0;
-    for (var transaction in transactions) {
-      if (transaction.type == 'settlement') {
-        // For settlements, if current user paid, they received money (positive)
-        // If friend paid, current user gave money (negative)
-        if (transaction.paidBy == _dataService.currentUserId) {
-          balance += transaction.amount;
-        }
-        else {
-        balance -= transaction.amount;
-      }
-    } else {
-    // For expenses, if current user paid, friend owes them (positive)
-    // If friend paid, current user owes friend (negative)
-    if (transaction.paidBy == _dataService.currentUserId) {
-    balance += transaction.amount; // Assuming split equally
-    } else {
-    balance -= transaction.amount; // Assuming split equally
-    }
-    }
+  Future<void> _navigateToAddTransaction({
+    required String friendId,
+    required String friendName,
+    required String paidById,
+    required String paidByName,
+    required double currentBalance,
+    required String transactionType,
+  }) async {
+    HapticFeedback.lightImpact();
+    await Navigator.push(
+      context,
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 600),
+        reverseTransitionDuration: const Duration(milliseconds: 600),
+        pageBuilder: (context, animation, secondaryAnimation) => AddTransactionPage(
+          friendId: friendId,
+          friendName: friendName,
+          paidById: paidById,
+          paidByName: paidByName,
+          currentBalance: currentBalance,
+          transactionType: transactionType,
+        ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          const begin = Offset(0.0, 1.0); // Slide from bottom
+          const end = Offset.zero;
+          const curve = Curves.easeInOutCubic;
+
+          // Slide transition
+          var slideTween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+          var slideAnimation = animation.drive(slideTween);
+
+          // Fade transition
+          var fadeTween = Tween<double>(begin: 0.0, end: 1.0).chain(CurveTween(curve: curve));
+          var fadeAnimation = animation.drive(fadeTween);
+
+          // Scale transition
+          var scaleTween = Tween<double>(begin: 0.8, end: 1.0).chain(CurveTween(curve: curve));
+          var scaleAnimation = animation.drive(scaleTween);
+
+          return SlideTransition(
+            position: slideAnimation,
+            child: FadeTransition(
+              opacity: fadeAnimation,
+              child: ScaleTransition(
+                scale: scaleAnimation,
+                child: child,
+              ),
+            ),
+          );
+        },
+      ),
+    ).then((result) {
+      if (result == true) _refreshTransactions();
+    });
   }
-    return balance;
-  }
-  @override
-  void dispose() {
-    _amountController.dispose();
-    super.dispose();
-  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.friend.name),
-        backgroundColor: Colors.blue,
-        foregroundColor: Colors.white,
+        elevation: 2,
+        backgroundColor: Colors.transparent,
+        flexibleSpace: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Colors.blue.shade700, Colors.blue.shade900],
+            ),
+          ),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.blue.shade100,
+              ),
+              child: Text(
+                widget.friend.avatar,
+                style: const TextStyle(fontSize: 20),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              widget.friend.name,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
-      body: StreamBuilder<List<Transaction>>(
-        stream: _dataService.getTransactionsStream(widget.friend.id),
-        builder: (context, snapshot) {
-          final transactions = snapshot.data ?? [];
-          final currentBalance = _calculateBalance(transactions);
+      body: FutureBuilder<Stream<List<Transaction>>>(
+        future: _dataService.getTransactionsStream(widget.friend.id),
+        builder: (context, futureSnapshot) {
+          if (futureSnapshot.connectionState == ConnectionState.waiting) {
+            return const SkeletonLoadingWidget(itemCount: 3); // Use skeleton for FutureBuilder
+          }
+          if (futureSnapshot.hasError) {
+            return Center(child: Text('Error: ${futureSnapshot.error}'));
+          }
+          if (!futureSnapshot.hasData) {
+            return const Center(child: Text('No data available'));
+          }
 
-          return Column(
-            children: [
-              // Balance Summary - Now updates dynamically
-              Container(
-                width: double.infinity,
-                padding: EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.blue.shade50, Colors.blue.shade100],
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      widget.friend.avatar,
-                      style: TextStyle(fontSize: 30),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      _getBalanceText(currentBalance),
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: _getBalanceColor(currentBalance),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+          final stream = futureSnapshot.data!;
 
-              // Add Transaction Section
-              Padding(
-                padding: EdgeInsets.all(10),
-                child: Column(
-                  children: [
-                    DropdownButtonFormField<String>(
-                      value: _selectedDescription,
-                      decoration: InputDecoration(
-                        labelText: 'Description',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.description),
-                      ),
-                      items: _descriptionOptions.map((String description) {
-                        return DropdownMenuItem<String>(
-                          value: description,
-                          child: Text(description),
-                        );
-                      }).toList(),
-                      onChanged: (String? newValue) {
-                        setState(() {
-                          _selectedDescription = newValue;
-                        });
-                      },
-                    ),
-                    SizedBox(height: 10),
-                    TextField(
-                      controller: _amountController,
-                      keyboardType: TextInputType.number,
-                      decoration: InputDecoration(
-                        labelText: 'Amount (₹)',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.currency_rupee),
-                      ),
-                    ),
-                    SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () => _addTransaction(_dataService.currentUserId, 'expense'),
-                            icon: Icon(Icons.add),
-                            label: Text('I Paid'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.green,
-                              foregroundColor: Colors.white,
-                            ),
-                          ),
-                        ),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () => _addTransaction(widget.friend.id, 'expense'),
-                            icon: Icon(Icons.add),
-                            label: Text('${widget.friend.name.split(' ')[0]} Paid'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.orange,
-                              foregroundColor: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: 8),
-                    ElevatedButton.icon(
-                      onPressed: () => _showSettlementDialog(currentBalance),
-                      icon: Icon(Icons.account_balance_wallet),
-                      label: Text('Settle Up'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue,
-                        foregroundColor: Colors.white,
-                        minimumSize: Size(double.infinity, 40),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+          return StreamBuilder<List<Transaction>>(
+            stream: stream,
+            builder: (context, snapshot) {
+              final transactions = snapshot.data ?? [];
+              final currentBalance = TransactionUtils.calculateBalance(
+                transactions,
+                _dataService.currentUserId,
+              );
 
-              Divider(),
-
-              // Transaction History
-              Expanded(
-                child: _buildTransactionsList(snapshot),
-              ),
-            ],
+              return Column(
+                children: [
+                  _buildBalanceDisplay(currentBalance),
+                  Expanded(child: _buildTransactionsList(snapshot)),
+                  Divider(color: Colors.blue.shade200, thickness: 1),
+                  _buildActionButtons(currentBalance),
+                  const SizedBox(height: 15),
+                ],
+              );
+            },
           );
         },
       ),
     );
   }
 
+  Widget _buildBalanceDisplay(double currentBalance) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Colors.blue.shade50, Colors.blue.shade100],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.blue.shade100.withOpacity(0.2),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Text(
+            currentBalance > 0
+                ? 'Take ₹${currentBalance.abs().toStringAsFixed(2)} from ${widget.friend.name}'
+                : currentBalance < 0
+                ? 'Give ₹${currentBalance.abs().toStringAsFixed(2)} to ${widget.friend.name}'
+                : 'All settled up!',
+            style: TextStyle(
+              fontSize:22 ,
+              fontWeight: FontWeight.bold,
+              color: TransactionUtils.getBalanceColor(currentBalance),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTransactionsList(AsyncSnapshot<List<Transaction>> snapshot) {
     if (snapshot.connectionState == ConnectionState.waiting) {
-      return Center(child: CircularProgressIndicator());
+      return const SkeletonLoadingWidget(itemCount: 3); // Use skeleton for StreamBuilder
     }
 
     if (snapshot.hasError) {
@@ -203,382 +224,475 @@ class _TransactionPageState extends State<TransactionPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.error_outline, size: 64, color: Colors.red),
-            SizedBox(height: 16),
-            Text('Error loading transactions'),
+            Icon(Icons.error_outline, size: 48, color: Colors.red.shade600),
+            const SizedBox(height: 16),
+            Text('Error loading transactions: ${snapshot.error}'),
+            ElevatedButton(
+              onPressed: () => setState(() {}),
+              child: const Text('Retry'),
+            ),
           ],
         ),
       );
     }
 
     final transactions = snapshot.data ?? [];
-
     if (transactions.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.receipt_long, size: 64, color: Colors.grey),
-            SizedBox(height: 16),
-            Text(
+            Icon(Icons.receipt_long, size: 48, color: Colors.blue.shade600),
+            const SizedBox(height: 16),
+            const Text(
               'No transactions yet',
-              style: TextStyle(
-                fontSize: 18,
-                color: Colors.grey,
-              ),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
           ],
         ),
       );
     }
 
-    return ListView.builder(
-      padding: EdgeInsets.symmetric(horizontal: 16),
-      itemCount: transactions.length,
-      itemBuilder: (context, index) {
-        final transaction = transactions[transactions.length - 1 - index];
-        return _buildTransactionTile(transaction);
-      },
-    );
-  }
+    transactions.sort((a, b) => b.date.compareTo(a.date));
 
-  Widget _buildTransactionTile(Transaction transaction) {
-    final isCurrentUserPayer = transaction.paidBy == _dataService.currentUserId;
-    final paidByName = isCurrentUserPayer ? 'You' : widget.friend.name.split(' ')[0];
+    List<Widget> listItems = [];
+    String? previousDateString;
 
-    return Card(
-      margin: EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: transaction.type == 'settlement'
-              ? Colors.blue.shade100
-              : (isCurrentUserPayer ? Colors.green.shade100 : Colors.orange.shade100),
-          child: Icon(
-            transaction.type == 'settlement'
-                ? Icons.account_balance_wallet
-                : Icons.receipt,
-            color: transaction.type == 'settlement'
-                ? Colors.blue
-                : (isCurrentUserPayer ? Colors.green : Colors.orange),
+    for (int i = 0; i < transactions.length; i++) {
+      final transaction = transactions[i];
+      final currentDateString = DateFormat('yyyy-MM-dd').format(transaction.date);
+
+      if (previousDateString != currentDateString) {
+        listItems.add(_buildDateHeader(transaction.date));
+        previousDateString = currentDateString;
+      }
+
+      final isUserPaid = transaction.paidBy == _dataService.currentUserId;
+
+      listItems.add(
+        Card(
+          margin: const EdgeInsets.only(bottom: 8),
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
           ),
-        ),
-        title: Text(transaction.description),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Paid by $paidByName'),
-            Text(
-              '${transaction.date.day}/${transaction.date.month}/${transaction.date.year}',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-          ],
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '₹${transaction.amount.toStringAsFixed(2)}',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
+          child: ListTile(
+            leading: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: isUserPaid ? Colors.green.shade100 : Colors.orange.shade100,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                isUserPaid ? Icons.arrow_upward : Icons.arrow_downward,
+                color: isUserPaid ? Colors.green.shade700 : Colors.orange.shade700,
               ),
             ),
-            SizedBox(width: 8),
-            PopupMenuButton<String>(
-              icon: Icon(Icons.more_vert, size: 20),
-              onSelected: (value) {
-                if (value == 'delete') {
-                  _showDeleteConfirmationDialog(transaction);
-                }
-              },
-              itemBuilder: (BuildContext context) => [
-                PopupMenuItem<String>(
-                  value: 'delete',
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete, color: Colors.red, size: 18),
-                      SizedBox(width: 8),
-                      Text('Delete', style: TextStyle(color: Colors.red)),
-                    ],
+            title: Text(
+              transaction.description,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              DateFormat('MMM dd, yyyy • hh:mm a').format(transaction.date),
+              style: const TextStyle(fontSize: 12),
+            ),
+            trailing: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '₹${transaction.amount.toStringAsFixed(2)}',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: isUserPaid ? Colors.green.shade700 : Colors.orange.shade700,
                   ),
+                ),
+                Text(
+                  isUserPaid ? 'You paid' : '${widget.friend.name.split(' ')[0]} paid',
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
                 ),
               ],
             ),
-          ],
+            onLongPress: () => _showTransactionOptions(transaction),
+          ),
         ),
-      ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      children: listItems,
     );
   }
 
-    void _addTransaction(String paidBy, String type) {
-      if (_selectedDescription == null || _selectedDescription!.isEmpty || _amountController.text.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Please fill all fields')),
-        );
-        return;
-      }
+  Widget _buildDateHeader(DateTime date) {
+    String dateText = DateFormat('dd-MM-yyyy').format(date);
 
-      final amount = double.tryParse(_amountController.text);
-      if (amount == null || amount <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Please enter a valid amount')),
-        );
-        return;
-      }
-
-      final transaction = Transaction(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        description: _selectedDescription!,
-        amount: amount,
-        paidBy: paidBy,
-        date: DateTime.now(),
-        type: type,
-      );
-
-      _dataService.addTransaction(widget.friend.id, transaction);
-
-    // _loadFCMToken();
-      setState(() {
-        _selectedDescription = null;
-      });
-      _amountController.clear();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Transaction added successfully')),
-      );
-    }
-  // Future<void> _loadFCMToken() async {
-  //   String? token = await _dataService.getCurrentUserFCMToken();
-  //   setState(() {
-  //     _fcmToken  = token;
-  //   });
-  // }
-  void _showSettlementDialog(double currentBalance) {
-    if (currentBalance == 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Already settled up!')),
-      );
-      return;
-    }
-
-    final amountController = TextEditingController(
-      text: currentBalance.abs().toStringAsFixed(2),
-    );
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Settle Up'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              currentBalance > 0
-                  ? '${widget.friend.name} owes you ₹${currentBalance.abs().toStringAsFixed(2)}'
-                  : 'You owe ${widget.friend.name} ₹${currentBalance.abs().toStringAsFixed(2)}',
-              style: TextStyle(fontSize: 16),
+    return Container(
+      margin: const EdgeInsets.only(top: 16, bottom: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: CustomPaint(
+              size: const Size(double.infinity, 20),
+              painter: DashPainter(),
             ),
-            SizedBox(height: 16),
-            TextField(
-              controller: amountController,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                labelText: 'Settlement Amount',
-                border: OutlineInputBorder(),
-                prefixText: '₹',
+          ),
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.blue.shade200),
+            ),
+            child: Text(
+              dateText,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.blue.shade700,
               ),
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
           ),
-          ElevatedButton(
-            onPressed: () {
-              final amount = double.tryParse(amountController.text);
-              if (amount != null && amount > 0) {
-                final paidBy = currentBalance > 0 ? widget.friend.id : _dataService.currentUserId;
-                final transaction = Transaction(
-                  id: DateTime.now().millisecondsSinceEpoch.toString(),
-                  description: 'Settlement',
-                  amount: amount,
-                  paidBy: paidBy,
-                  date: DateTime.now(),
-                  type: 'settlement',
-                );
-
-                _dataService.addTransaction(widget.friend.id, transaction);
-                Navigator.pop(context);
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Settlement recorded')),
-                );
-              }
-            },
-            child: Text('Settle'),
+          Expanded(
+            child: CustomPaint(
+              size: const Size(double.infinity, 20),
+              painter: DashPainter(),
+            ),
           ),
         ],
       ),
     );
   }
 
-  String _getBalanceText(double balance) {
-    if (balance > 0) {
-      return ' Take ₹${balance.abs().toStringAsFixed(2)} From ${widget.friend.name.split(' ')[0]}';
-    } else if (balance < 0) {
-      return ' Give ₹${balance.abs().toStringAsFixed(2)} To ${widget.friend.name.split(' ')[0]}';
-    } else {
-      return 'All settled up! 🎉';
-    }
-  }
-
-  Color _getBalanceColor(double balance) {
-    if (balance > 0) {
-      return Colors.green;
-    } else if (balance < 0) {
-      return Colors.red;
-    } else {
-      return Colors.blue;
-    }
-  }
-
-  void _showDeleteConfirmationDialog(Transaction transaction) {
-    final isCurrentUserPayer = transaction.paidBy == _dataService.currentUserId;
-    final paidByName = isCurrentUserPayer ? 'You' : widget.friend.name.split(' ')[0];
-
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Row(
-            children: [
-              Icon(Icons.warning, color: Colors.orange),
-              SizedBox(width: 8),
-              Text('Delete Transaction'),
-            ],
+  Widget _buildActionButtons(double currentBalance) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => _navigateToAddTransaction(
+                friendId: widget.friend.id,
+                friendName: widget.friend.name,
+                paidById: _dataService.currentUserId,
+                paidByName: _dataService.currentUserName,
+                currentBalance: currentBalance,
+                transactionType: 'user_paid',
+              ),
+              icon: const Icon(Icons.account_balance_wallet, size: 20),
+              label: const Text('I paid'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green.shade600,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
           ),
-          content: Column(
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => _navigateToAddTransaction(
+                friendId: widget.friend.id,
+                friendName: widget.friend.name,
+                paidById: widget.friend.id,
+                paidByName: widget.friend.name,
+                currentBalance: currentBalance,
+                transactionType: 'friend_paid',
+              ),
+              icon: const Icon(Icons.account_balance_wallet, size: 20),
+              label: Text('${widget.friend.name.split(' ')[0]} Paid'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange.shade600,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => _showSettlementDialog(currentBalance),
+              icon: const Icon(Icons.account_balance_wallet),
+              label: const Text('Settle Up'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTransactionOptions(Transaction transaction) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (BuildContext context) {
+        final isUserPaid = transaction.paidBy == _dataService.currentUserId;
+        final paidByName = isUserPaid ? 'You' : widget.friend.name.split(' ')[0];
+
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.all(16),
+          child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Are you sure you want to delete this transaction?'),
-              SizedBox(height: 12),
               Container(
-                width: 280,
-                padding: EdgeInsets.all(12),
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 20),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blue.shade200),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       transaction.description,
-                      style: TextStyle(fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue.shade900,
+                      ),
                     ),
-                    SizedBox(height: 4),
-                    Text('Paid by $paidByName'),
-                    Text('Amount: ₹${transaction.amount.toStringAsFixed(2)}'),
+                    const SizedBox(height: 8),
                     Text(
-                      '${transaction.date.day}/${transaction.date.month}/${transaction.date.year}',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      'Amount: ₹${transaction.amount.toStringAsFixed(2)}',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.blue.shade700,
+                      ),
+                    ),
+                    Text(
+                      'Paid by: $paidByName',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.blue.shade700,
+                      ),
+                    ),
+                    Text(
+                      'Date: ${DateFormat('dd MMM yyyy, hh:mm a').format(transaction.date)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue.shade600,
+                      ),
                     ),
                   ],
                 ),
               ),
-              SizedBox(height: 12),
-              Text(
-                'This action cannot be undone.',
-                style: TextStyle(
-                  color: Colors.red,
-                  fontSize: 12,
-                  fontStyle: FontStyle.italic,
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _editTransaction(transaction);
+                      },
+                      icon: const Icon(Icons.edit, size: 18),
+                      label: const Text('Edit'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue.shade600,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showDeleteConfirmationDialog(transaction);
+                      },
+                      icon: const Icon(Icons.delete, size: 18),
+                      label: const Text('Delete'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red.shade600,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(
+                    'Cancel',
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontSize: 16,
+                    ),
+                  ),
                 ),
               ),
+              SizedBox(height: MediaQuery.of(context).padding.bottom),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                Navigator.of(context).pop();
-                await _deleteTransaction(transaction);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-              ),
-              child: Text('Delete'),
-            ),
-          ],
         );
       },
     );
   }
 
-  Future<void> _deleteTransaction(Transaction transaction) async {
-    try {
-      // Show loading indicator
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+  // Replace the existing _editTransaction method with this:
+
+  void _editTransaction(Transaction transaction) async {
+    if(transaction.createdBy == _dataService.currentUserId){
+      final isUserPaid = transaction.createdBy == _dataService.currentUserId;
+      // Calculate current balance (you might need to get fresh transactions)
+      final stream = await _dataService.getTransactionsStream(widget.friend.id);
+      final transactions = await stream.first;
+      final currentBalance = TransactionUtils.calculateBalance(
+        transactions,
+        _dataService.currentUserId,
+      );
+
+      HapticFeedback.lightImpact();
+      await Navigator.push(
+        context,
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 600),
+          reverseTransitionDuration: const Duration(milliseconds: 600),
+          pageBuilder: (context, animation, secondaryAnimation) => AddTransactionPage(
+            friendId: widget.friend.id,
+            friendName: widget.friend.name,
+            paidById: transaction.paidBy,
+            paidByName: isUserPaid ? _dataService.currentUserName : widget.friend.name,
+            currentBalance: currentBalance,
+            transactionType: isUserPaid ? 'user_paid' : 'friend_paid',
+            // Add these parameters for editing:
+            editingTransaction: transaction, // Pass the transaction to edit
+            isEditing: true, // Flag to indicate we're editing
+          ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            const begin = Offset(0.0, 1.0);
+            const end = Offset.zero;
+            const curve = Curves.easeInOutCubic;
+
+            var slideTween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+            var slideAnimation = animation.drive(slideTween);
+
+            var fadeTween = Tween<double>(begin: 0.0, end: 1.0).chain(CurveTween(curve: curve));
+            var fadeAnimation = animation.drive(fadeTween);
+
+            var scaleTween = Tween<double>(begin: 0.8, end: 1.0).chain(CurveTween(curve: curve));
+            var scaleAnimation = animation.drive(scaleTween);
+
+            return SlideTransition(
+              position: slideAnimation,
+              child: FadeTransition(
+                opacity: fadeAnimation,
+                child: ScaleTransition(
+                  scale: scaleAnimation,
+                  child: child,
                 ),
               ),
-              SizedBox(width: 16),
-              Text('Deleting transaction...'),
-            ],
-          ),
-          duration: Duration(seconds: 2),
+            );
+          },
         ),
-      );
-
-      // Delete the transaction
-      await _dataService.deleteTransaction(widget.friend.id, transaction.id);
-
-      // Show success message
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ).then((result) {
+        if (result == true) _refreshTransactions();
+      });
+    }
+    else{
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Row(
-            children: [
-              Icon(Icons.check_circle, color: Colors.white),
-              SizedBox(width: 8),
-              Text('Transaction deleted successfully'),
-            ],
+          content: Text("You Don't have access to update"),
+          backgroundColor: Colors.red[600],
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
           ),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
-    } catch (e) {
-      // Show error message
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              Icon(Icons.error, color: Colors.white),
-              SizedBox(width: 8),
-              Text('Failed to delete transaction'),
-            ],
-          ),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 3),
         ),
       );
     }
   }
+
+  void _showDeleteConfirmationDialog(Transaction transaction) {
+    if(transaction.createdBy == _dataService.currentUserId){
+      DeleteConfirmationDialog.show(
+        context: context,
+        transaction: transaction,
+        friend: widget.friend,
+        dataService: _dataService,
+        onDeleted: () => _refreshTransactions(),
+      );
+    }
+    else{
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("You Don't have access to update"),
+          backgroundColor: Colors.red[600],
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+      );
+    }
+  }
+}
+
+class DashPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.blue.shade300
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+
+    const dashWidth = 5;
+    const dashSpace = 3;
+    double startX = 0;
+
+    while (startX < size.width) {
+      canvas.drawLine(
+        Offset(startX, size.height / 2),
+        Offset(startX + dashWidth, size.height / 2),
+        paint,
+      );
+      startX += dashWidth + dashSpace;
+    }
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }
